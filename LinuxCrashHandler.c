@@ -1,27 +1,29 @@
 #define _GNU_SOURCE
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <limits.h>
+#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
+int ExecuteCommand(char* cmd);
 
-#define BUF_SIZE 1024
-#define VERSION  1
-#define REVISION 0
+#define BUF_SIZE        1024
+#define VERSION         1
+#define REVISION        0
+#define CORE_FILE_NAME  "coredump"
+#define COMPRESS_CMD    "tar -zcvf"
+#define FILE_EXT        ".tar.gz"
+
 
 void Help(void);
 void Install(char *path, char *logPath);
 void GenerateCorefile(char *path);
+void CompressCoreFile(char *path);
 
 int main(int argc, char *argv[])
 {
-	int tot, j;
-	ssize_t nread;
-	char buf[BUF_SIZE];
-	FILE *fp;
-	pid_t pid;
 	char path[128];
 
 	/* check for install argument */
@@ -56,6 +58,9 @@ int main(int argc, char *argv[])
 
 	/* Path is defined now let's generate core dump file */
 	GenerateCorefile(path);
+
+    /* Generate zip file */
+    CompressCoreFile(argv[5]);
 
 	exit(EXIT_SUCCESS);
 }
@@ -110,14 +115,14 @@ void Install(char *path, char *logPath)
 	{
 		/* set the core_pattern */
 		fprintf(fp, "|%s %%p %%s %%u %%g %s\n", actualpath, logPath);
-		fclose(fp);
 	}
+    fclose(fp);
 
 	fp = fopen("/proc/sys/kernel/core_pipe_limit", "w");
-	if (!fp) 
+    if (fp == NULL)
 	{
 		perror("Could not open core_pipe_limit for installation\n");
-		exit(1);
+        exit(1);
 	}
 
 	fprintf(fp, "1\n");
@@ -127,19 +132,20 @@ void Install(char *path, char *logPath)
 
 void GenerateCorefile(char *path)
 {
-	int tot, j;
-	ssize_t nread;
-	char buf[BUF_SIZE];
-	int core_out_fd;
+    int         tot = 0;
+    ssize_t     nread;
+    char        buf[BUF_SIZE];
+    int         core_out_fd;
+
+    /* Open fd to write file */
 	core_out_fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
 
-	/* Count bytes in standard input (the core dump) */
-	tot = 0;
+    /* Count bytes in standard input (the core dump) */
 	while ((nread = read(STDIN_FILENO, buf, BUF_SIZE)) > 0)
 	{
 		if (core_out_fd>=0) 
 		{
-			write(core_out_fd, buf, nread);
+            write(core_out_fd, buf, (size_t)nread);
 		}
 		tot += nread;
 	}
@@ -150,4 +156,50 @@ void GenerateCorefile(char *path)
 	{
 		close(core_out_fd);
 	}
+}
+
+int ExecuteCommand(char* cmd)
+{
+    FILE    *fP;
+    int     sts = 0;
+
+    if (NULL == cmd)
+    {
+        printf("%s :Command pass is NULL\n", __func__);
+        return (-1);
+    }
+
+    /* open file to execute command */
+    fP = popen(cmd, "w");
+    if(NULL == fP)
+    {
+        printf(" popen: Failed to popen file:%s\n", strerror(errno));
+        return (-1);
+    }
+
+    /*close file*/
+    sts = pclose(fP);
+
+    if (-1 == sts)
+    {
+        printf("popen : Failed to close file :%s\n",strerror(errno));
+        return (-1);
+    }
+
+    return (WEXITSTATUS(sts));
+}
+
+void CompressCoreFile(char *path)
+{
+    char buff[PATH_MAX];
+
+    /* Create tar.gz file with same name */
+    snprintf(buff, PATH_MAX, " cd %s && " COMPRESS_CMD " "CORE_FILE_NAME FILE_EXT" "CORE_FILE_NAME, path);
+
+    ExecuteCommand(buff);
+
+    /* Remove input file */
+    snprintf(buff, PATH_MAX, "rm %s/"CORE_FILE_NAME, path);
+
+    ExecuteCommand(buff);
 }
